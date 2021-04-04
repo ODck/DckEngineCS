@@ -16,5 +16,8 @@ namespace Dck.Engine.Graphics.Application
 
         uint Width { get; }
         uint Height { get; }
+
+        void SetApplication(Application app);
+        void Draw(float deltaTime);
     }
 }

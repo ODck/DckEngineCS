@@ -16,6 +16,8 @@ namespace Dck.Engine.Graphics.Application
         private InputSnapshot _frameSnapshot;
         public Vector2 MousePosition;
 
+        public InputSnapshot FrameSnapshot => _frameSnapshot;
+
         public bool GetKey(Key key)
         {
             return _currentlyPressedKeys.Contains(key);

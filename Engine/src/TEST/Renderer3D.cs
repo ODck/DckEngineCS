@@ -149,16 +149,13 @@ void main()
                 _worldBuffer,
                 _surfaceTextureView,
                 _app.GraphicsDevice.Aniso4xSampler));
-
-            _cl = factory.CreateCommandList();
+            
             Log.Debug("Resources loaded!");
         }
 
         public void Draw(float deltaSeconds)
         {
-            Log.Debug(deltaSeconds);
             _ticks += deltaSeconds * 1000f;
-            _cl.Begin();
 
             _cl.UpdateBuffer(_projectionBuffer, 0, Matrix4x4.CreatePerspectiveFieldOfView(
                 1.0f,
@@ -172,8 +169,7 @@ void main()
                 Matrix4x4.CreateFromAxisAngle(Vector3.UnitY, _ticks / 1000f)
                 * Matrix4x4.CreateFromAxisAngle(Vector3.UnitX, _ticks / 3000f);
             _cl.UpdateBuffer(_worldBuffer, 0, ref rotation);
-
-            _cl.SetFramebuffer(_app.MainSwapchain.Framebuffer);
+            
             _cl.ClearColorTarget(0, RgbaFloat.DarkRed);
             _cl.ClearDepthStencil(1f);
             _cl.SetPipeline(_pipeline);
@@ -182,11 +178,6 @@ void main()
             _cl.SetGraphicsResourceSet(0, _projViewSet);
             _cl.SetGraphicsResourceSet(1, _worldTextureSet);
             _cl.DrawIndexed(36, 1, 0, 0, 0);
-
-            _cl.End();
-            _app.GraphicsDevice.SubmitCommands(_cl);
-            _app.GraphicsDevice.SwapBuffers(_app.MainSwapchain);
-            _app.GraphicsDevice.WaitForIdle();
         }
 
         private static VertexPositionTexture[] GetCubeVertices()
@@ -262,6 +253,11 @@ void main()
                 TexU = uv.X;
                 TexV = uv.Y;
             }
+        }
+
+        public void SetCommandList(CommandList commandList)
+        {
+            _cl = commandList;
         }
     }
 }

@@ -1,8 +1,9 @@
 ﻿using System;
 using System.Reactive;
-using Dck.Engine.Graphics.Services;
+using Dck.Engine.Core;
 using Dck.Engine.Logging;
 using Dck.Engine.Settings;
+using Dck.Engine.UI;
 using Dck.Subject;
 using Veldrid;
 using Veldrid.Sdl2;
@@ -13,10 +14,16 @@ namespace Dck.Engine.Graphics.Application
 {
     public class GraphicalWindow : IApplicationWindow
     {
+        //Injected
+        private readonly Input _input;
+
         private readonly DisposeCollectorResourceFactory _factory;
         private readonly GraphicsDevice _graphicsDevice;
-        private readonly Input _input;
         private readonly Sdl2Window _window;
+        
+        private ImGuiManager _imGui;
+        private Application _application;
+        private Clock _stopwatch;
         private bool _windowResized = true;
 
         public GraphicalWindow(Input input)
@@ -43,7 +50,7 @@ namespace Dck.Engine.Graphics.Application
                 true);
             _graphicsDevice = VeldridStartup.CreateGraphicsDevice(_window, options);
             _factory = new DisposeCollectorResourceFactory(_graphicsDevice.ResourceFactory);
-
+            
             _input = input;
         }
 
@@ -54,13 +61,26 @@ namespace Dck.Engine.Graphics.Application
         public DckSubject<KeyEvent> KeyPressed { get; } = new();
         public uint Width => (uint) _window.Width;
         public uint Height => (uint) _window.Height;
+        public void SetApplication(Application app)
+        {
+            _application = app;
+        }
+
+        public void Draw(float deltaTime)
+        {
+            _imGui.Draw(_stopwatch, _input);
+        }
+
+        public GraphicsDevice GraphicsDevice => _graphicsDevice;
+        public ResourceFactory ResourceFactory => _factory;
 
         public void Start()
         {
             Log.Info($"{Constants.Title} Started in Graphical Mode");
             GraphicsDeviceCreated.Trigger((_graphicsDevice, _factory, _graphicsDevice.MainSwapchain));
-            var stopwatch = Time.StartNew();
-            while (_window.Exists) Tick(stopwatch);
+            _imGui = new ImGuiManager(_application);
+            _stopwatch = Clock.StartNew();
+            while (_window.Exists) Tick(_stopwatch);
 
             Log.Info($"{Constants.Title} Exiting...");
             Dispose();
@@ -76,7 +96,7 @@ namespace Dck.Engine.Graphics.Application
             GC.SuppressFinalize(this);
         }
 
-        private void Tick(Time stopwatch)
+        private void Tick(Clock stopwatch)
         {
             var inputSnapshot = _window.PumpEvents();
             _input.UpdateFrameInput(inputSnapshot);
@@ -88,7 +108,8 @@ namespace Dck.Engine.Graphics.Application
                 _graphicsDevice.ResizeMainWindow((uint) _window.Width, (uint) _window.Height);
                 Resized.Trigger(Unit.Default);
             }
-
+            
+            //Last in the tick always
             Rendering.Trigger(stopwatch.DeltaTime);
         }
 

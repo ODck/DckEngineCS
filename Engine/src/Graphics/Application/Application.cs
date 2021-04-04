@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Reactive.Disposables;
 using Autofac;
+using Dck.Engine.Core;
 using Dck.Engine.Graphics.Services;
 using Dck.Engine.Logging;
 using Dck.Engine.TEST;
@@ -34,6 +35,7 @@ namespace Dck.Engine.Graphics.Application
         public GraphicsDevice GraphicsDevice { get; private set; }
         public ResourceFactory ResourceFactory { get; private set; }
         public Swapchain MainSwapchain { get; private set; }
+        public CommandList CommandList { get; private set; }
 
         public void Dispose()
         {
@@ -59,7 +61,16 @@ namespace Dck.Engine.Graphics.Application
         private void Draw(float deltaTime)
         {
             if (GraphicsDevice == null) return;
+            CommandList.Begin();
+            ResetFramebuffer();
+
             _renderer.Draw(deltaTime);
+            Window.Draw(deltaTime);
+
+            CommandList.End();
+            GraphicsDevice.SubmitCommands(CommandList);
+            GraphicsDevice.SwapBuffers();
+            GraphicsDevice.WaitForIdle();
         }
 
         private void OnDeviceDestroyed()
@@ -67,6 +78,7 @@ namespace Dck.Engine.Graphics.Application
             GraphicsDevice = null;
             ResourceFactory = null;
             MainSwapchain = null;
+            CommandList = null;
         }
 
         private void HandleWindowResize()
@@ -78,10 +90,18 @@ namespace Dck.Engine.Graphics.Application
             Swapchain swapchain)
         {
             Log.Debug("Graphics device created");
+            Window.SetApplication(this);
             GraphicsDevice = graphicsDevice;
             ResourceFactory = factory;
             MainSwapchain = swapchain;
+            CommandList = factory.CreateCommandList();
+            _renderer.SetCommandList(CommandList);
             _renderer.CreateResources(ResourceFactory);
+        }
+
+        private void ResetFramebuffer()
+        {
+            CommandList.SetFramebuffer(GraphicsDevice.SwapchainFramebuffer);
         }
     }
 }
