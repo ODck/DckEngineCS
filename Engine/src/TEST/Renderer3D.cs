@@ -1,263 +1,180 @@
-﻿using System.Numerics;
-using System.Text;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using AssetPrimitives;
 using Dck.Engine.Graphics.Application;
-using Dck.Engine.Logging;
+using Dck.Engine.Graphics.Services;
+using Serilog;
 using Veldrid;
 using Veldrid.SPIRV;
+using Log = Dck.Engine.Logging.Log;
 
 namespace Dck.Engine.TEST
 {
     public class Renderer3D
     {
-        private const string VertexCode = @"
-#version 450
-
-layout(set = 0, binding = 0) uniform ProjectionBuffer
-{
-    mat4 Projection;
-};
-
-layout(set = 0, binding = 1) uniform ViewBuffer
-{
-    mat4 View;
-};
-
-layout(set = 1, binding = 0) uniform WorldBuffer
-{
-    mat4 World;
-};
-
-layout(location = 0) in vec3 Position;
-layout(location = 1) in vec2 TexCoords;
-layout(location = 0) out vec2 fsin_texCoords;
-
-void main()
-{
-    vec4 worldPosition = World * vec4(Position, 1);
-    vec4 viewPosition = View * worldPosition;
-    vec4 clipPosition = Projection * viewPosition;
-    gl_Position = clipPosition;
-    fsin_texCoords = TexCoords;
-}";
-
-        private const string FragmentCode = @"
-#version 450
-
-layout(location = 0) in vec2 fsin_texCoords;
-layout(location = 0) out vec4 fsout_color;
-
-layout(set = 1, binding = 1) uniform texture2D SurfaceTexture;
-layout(set = 1, binding = 2) uniform sampler SurfaceSampler;
-
-void main()
-{
-    fsout_color =  texture(sampler2D(SurfaceTexture, SurfaceSampler), fsin_texCoords);
-}";
-
-        private readonly ushort[] _indices;
-
-        private readonly VertexPositionTexture[] _vertices;
         private readonly Application _app;
-        private CommandList _cl;
-        private DeviceBuffer _indexBuffer;
-        private Pipeline _pipeline;
-        private DeviceBuffer _projectionBuffer;
-        private ResourceSet _projViewSet;
-        private Texture _surfaceTexture;
-        private TextureView _surfaceTextureView;
-        private float _ticks;
-        private DeviceBuffer _vertexBuffer;
-        private DeviceBuffer _viewBuffer;
-        private DeviceBuffer _worldBuffer;
-        private ResourceSet _worldTextureSet;
+        private CommandList _commandList = null;
+        private Camera _camera;
+
+        //Shared
+        private ResourceSet _sharedResourceSet;
+        private DeviceBuffer _cameraProjectionBuffer;
+        private DeviceBuffer _lightInfoBuffer;
+
+        //StarField
+        private Pipeline _starFieldPipeline;
+        private DeviceBuffer _viewInfoBuffer;
+        private ResourceSet _viewInfoSet;
+
+        //Dynamic
+        private Vector3 _lightDir;
+        private bool _lightFromCamera = false; // Press F1 to switch where the directional light originates
+        private DeviceBuffer _rotationInfoBuffer; // Contains the local and global rotation values.
+        private float _localRotation = 0f; // Causes individual rocks to rotate around their centers
+        private float _globalRotation = 0f; // Causes rocks to rotate around the global origin (where the planet is)
 
 
         public Renderer3D(Application app)
         {
             _app = app;
-            _vertices = GetCubeVertices();
-            _indices = GetCubeIndices();
         }
 
-        public void CreateResources(ResourceFactory factory)
+        public void CreateResources(GraphicsDevice graphicsDevice)
         {
-            Log.Debug("Loading resources...");
-            _projectionBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer));
-            _viewBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer));
-            _worldBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer));
+            var factory = graphicsDevice.ResourceFactory;
+            _camera.Position = new Vector3(-36f, 20f, 100f);
+            _camera.Pitch = -0.3f;
+            _camera.Yaw = 0.1f;
 
-            _vertexBuffer =
-                factory.CreateBuffer(new BufferDescription(
-                    (uint) (VertexPositionTexture.SizeInBytes * _vertices.Length), BufferUsage.VertexBuffer));
-            _app.GraphicsDevice.UpdateBuffer(_vertexBuffer, 0, _vertices);
+            _cameraProjectionBuffer = factory.CreateBuffer(
+                new BufferDescription((uint) (Unsafe.SizeOf<Matrix4x4>() * 2),
+                    BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _lightInfoBuffer =
+                factory.CreateBuffer(new BufferDescription(32, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _rotationInfoBuffer =
+                factory.CreateBuffer(new BufferDescription(16, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _lightDir = Vector3.Normalize(new Vector3(0.3f, -0.75f, -0.3f));
 
-            _indexBuffer =
-                factory.CreateBuffer(new BufferDescription(sizeof(ushort) * (uint) _indices.Length,
-                    BufferUsage.IndexBuffer));
-            _app.GraphicsDevice.UpdateBuffer(_indexBuffer, 0, _indices);
+            var sharedVertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("Position", VertexElementSemantic.TextureCoordinate,
+                    VertexElementFormat.Float3),
+                new VertexElementDescription("Normal", VertexElementSemantic.TextureCoordinate,
+                    VertexElementFormat.Float3),
+                new VertexElementDescription("TexCoord", VertexElementSemantic.TextureCoordinate,
+                    VertexElementFormat.Float2));
 
-            var x = new TextureDescription(50, 50, 1, 1, 1, PixelFormat.R8_UInt, TextureUsage.Sampled,
-                TextureType.Texture2D);
-            var xd = factory.CreateTexture(x);
-            _surfaceTextureView = factory.CreateTextureView(xd);
+            var etc2Supported = graphicsDevice.GetPixelFormatSupport(
+                PixelFormat.ETC2_R8_G8_B8_UNorm,
+                TextureType.Texture2D,
+                TextureUsage.Sampled);
+            var pixelFormat = etc2Supported ? PixelFormat.ETC2_R8_G8_B8_UNorm : PixelFormat.BC3_UNorm;
 
-            var shaderSet = new ShaderSetDescription(
-                new[]
-                {
-                    new VertexLayoutDescription(
-                        new VertexElementDescription("Position", VertexElementSemantic.TextureCoordinate,
-                            VertexElementFormat.Float3),
-                        new VertexElementDescription("TexCoords", VertexElementSemantic.TextureCoordinate,
-                            VertexElementFormat.Float2))
-                },
-                factory.CreateFromSpirv(
-                    new ShaderDescription(ShaderStages.Vertex, Encoding.UTF8.GetBytes(VertexCode), "main"),
-                    new ShaderDescription(ShaderStages.Fragment, Encoding.UTF8.GetBytes(FragmentCode), "main")));
 
-            var projViewLayout = factory.CreateResourceLayout(
-                new ResourceLayoutDescription(
-                    new ResourceLayoutElementDescription("ProjectionBuffer", ResourceKind.UniformBuffer,
-                        ShaderStages.Vertex),
-                    new ResourceLayoutElementDescription("ViewBuffer", ResourceKind.UniformBuffer,
-                        ShaderStages.Vertex)));
-
-            var worldTextureLayout = factory.CreateResourceLayout(
-                new ResourceLayoutDescription(
-                    new ResourceLayoutElementDescription("WorldBuffer", ResourceKind.UniformBuffer,
-                        ShaderStages.Vertex),
-                    new ResourceLayoutElementDescription("SurfaceTexture", ResourceKind.TextureReadOnly,
-                        ShaderStages.Fragment),
-                    new ResourceLayoutElementDescription("SurfaceSampler", ResourceKind.Sampler,
-                        ShaderStages.Fragment)));
-
-            _pipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription(
+            //Starfield Resources
+            ResourceLayout invCameraInfoLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("InvCameraInfo", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
+            _viewInfoBuffer = factory.CreateBuffer(new BufferDescription((uint)Unsafe.SizeOf<MatrixPair>(), BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _viewInfoSet = factory.CreateResourceSet(new ResourceSetDescription(invCameraInfoLayout, _viewInfoBuffer));
+            
+            
+            ShaderSetDescription starFieldShaders = new ShaderSetDescription(
+                Array.Empty<VertexLayoutDescription>(),
+                LoadShaders("Starfield"));
+            
+            _starFieldPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription(
                 BlendStateDescription.SingleOverrideBlend,
-                DepthStencilStateDescription.DepthOnlyLessEqual,
-                RasterizerStateDescription.Default,
+                DepthStencilStateDescription.Disabled,
+                RasterizerStateDescription.CullNone,
                 PrimitiveTopology.TriangleList,
-                shaderSet,
-                new[] {projViewLayout, worldTextureLayout},
-                _app.MainSwapchain.Framebuffer.OutputDescription));
+                starFieldShaders,
+                new[] { invCameraInfoLayout },
+                graphicsDevice.MainSwapchain.Framebuffer.OutputDescription));
+        }
 
-            _projViewSet = factory.CreateResourceSet(new ResourceSetDescription(
-                projViewLayout,
-                _projectionBuffer,
-                _viewBuffer));
-
-            _worldTextureSet = factory.CreateResourceSet(new ResourceSetDescription(
-                worldTextureLayout,
-                _worldBuffer,
-                _surfaceTextureView,
-                _app.GraphicsDevice.Aniso4xSampler));
+        public void RenderFrame(float deltaTime)
+        {
+            _commandList.UpdateBuffer(_cameraProjectionBuffer, 0, new MatrixPair(_camera.ViewMatrix, _camera.ProjectionMatrix));
+            _localRotation += deltaTime * ((float)Math.PI * 2 / 9);
+            _globalRotation += -deltaTime * ((float)Math.PI * 2 / 240);
+            _commandList.UpdateBuffer(_rotationInfoBuffer, 0, new Vector4(_localRotation, _globalRotation, 0, 0));
             
-            Log.Debug("Resources loaded!");
-        }
-
-        public void Draw(float deltaSeconds)
-        {
-            _ticks += deltaSeconds * 1000f;
-
-            _cl.UpdateBuffer(_projectionBuffer, 0, Matrix4x4.CreatePerspectiveFieldOfView(
-                1.0f,
-                (float) _app.Window.Width / _app.Window.Height,
-                0.5f,
-                100f));
-
-            _cl.UpdateBuffer(_viewBuffer, 0, Matrix4x4.CreateLookAt(Vector3.UnitZ * 2.5f, Vector3.Zero, Vector3.UnitY));
-
-            var rotation =
-                Matrix4x4.CreateFromAxisAngle(Vector3.UnitY, _ticks / 1000f)
-                * Matrix4x4.CreateFromAxisAngle(Vector3.UnitX, _ticks / 3000f);
-            _cl.UpdateBuffer(_worldBuffer, 0, ref rotation);
+            Matrix4x4.Invert(_camera.ProjectionMatrix, out Matrix4x4 inverseProjection);
+            Matrix4x4.Invert(_camera.ViewMatrix, out Matrix4x4 inverseView);
+            _commandList.UpdateBuffer(_viewInfoBuffer, 0, new MatrixPair(
+                inverseProjection,
+                inverseView));
             
-            _cl.ClearColorTarget(0, RgbaFloat.DarkRed);
-            _cl.ClearDepthStencil(1f);
-            _cl.SetPipeline(_pipeline);
-            _cl.SetVertexBuffer(0, _vertexBuffer);
-            _cl.SetIndexBuffer(_indexBuffer, IndexFormat.UInt16);
-            _cl.SetGraphicsResourceSet(0, _projViewSet);
-            _cl.SetGraphicsResourceSet(1, _worldTextureSet);
-            _cl.DrawIndexed(36, 1, 0, 0, 0);
-        }
-
-        private static VertexPositionTexture[] GetCubeVertices()
-        {
-            var vertices = new[]
-            {
-                // Top
-                new VertexPositionTexture(new Vector3(-0.5f, +0.5f, -0.5f), new Vector2(0, 0)),
-                new VertexPositionTexture(new Vector3(+0.5f, +0.5f, -0.5f), new Vector2(1, 0)),
-                new VertexPositionTexture(new Vector3(+0.5f, +0.5f, +0.5f), new Vector2(1, 1)),
-                new VertexPositionTexture(new Vector3(-0.5f, +0.5f, +0.5f), new Vector2(0, 1)),
-                // Bottom                                                             
-                new VertexPositionTexture(new Vector3(-0.5f, -0.5f, +0.5f), new Vector2(0, 0)),
-                new VertexPositionTexture(new Vector3(+0.5f, -0.5f, +0.5f), new Vector2(1, 0)),
-                new VertexPositionTexture(new Vector3(+0.5f, -0.5f, -0.5f), new Vector2(1, 1)),
-                new VertexPositionTexture(new Vector3(-0.5f, -0.5f, -0.5f), new Vector2(0, 1)),
-                // Left                                                               
-                new VertexPositionTexture(new Vector3(-0.5f, +0.5f, -0.5f), new Vector2(0, 0)),
-                new VertexPositionTexture(new Vector3(-0.5f, +0.5f, +0.5f), new Vector2(1, 0)),
-                new VertexPositionTexture(new Vector3(-0.5f, -0.5f, +0.5f), new Vector2(1, 1)),
-                new VertexPositionTexture(new Vector3(-0.5f, -0.5f, -0.5f), new Vector2(0, 1)),
-                // Right                                                              
-                new VertexPositionTexture(new Vector3(+0.5f, +0.5f, +0.5f), new Vector2(0, 0)),
-                new VertexPositionTexture(new Vector3(+0.5f, +0.5f, -0.5f), new Vector2(1, 0)),
-                new VertexPositionTexture(new Vector3(+0.5f, -0.5f, -0.5f), new Vector2(1, 1)),
-                new VertexPositionTexture(new Vector3(+0.5f, -0.5f, +0.5f), new Vector2(0, 1)),
-                // Back                                                               
-                new VertexPositionTexture(new Vector3(+0.5f, +0.5f, -0.5f), new Vector2(0, 0)),
-                new VertexPositionTexture(new Vector3(-0.5f, +0.5f, -0.5f), new Vector2(1, 0)),
-                new VertexPositionTexture(new Vector3(-0.5f, -0.5f, -0.5f), new Vector2(1, 1)),
-                new VertexPositionTexture(new Vector3(+0.5f, -0.5f, -0.5f), new Vector2(0, 1)),
-                // Front                                                              
-                new VertexPositionTexture(new Vector3(-0.5f, +0.5f, +0.5f), new Vector2(0, 0)),
-                new VertexPositionTexture(new Vector3(+0.5f, +0.5f, +0.5f), new Vector2(1, 0)),
-                new VertexPositionTexture(new Vector3(+0.5f, -0.5f, +0.5f), new Vector2(1, 1)),
-                new VertexPositionTexture(new Vector3(-0.5f, -0.5f, +0.5f), new Vector2(0, 1))
-            };
-
-            return vertices;
-        }
-
-        private static ushort[] GetCubeIndices()
-        {
-            ushort[] indices =
-            {
-                0, 1, 2, 0, 2, 3,
-                4, 5, 6, 4, 6, 7,
-                8, 9, 10, 8, 10, 11,
-                12, 13, 14, 12, 14, 15,
-                16, 17, 18, 16, 18, 19,
-                20, 21, 22, 20, 22, 23
-            };
-
-            return indices;
-        }
-
-        public struct VertexPositionTexture
-        {
-            public const uint SizeInBytes = 20;
-
-            public float PosX;
-            public float PosY;
-            public float PosZ;
-
-            public float TexU;
-            public float TexV;
-
-            public VertexPositionTexture(Vector3 pos, Vector2 uv)
-            {
-                PosX = pos.X;
-                PosY = pos.Y;
-                PosZ = pos.Z;
-                TexU = uv.X;
-                TexV = uv.Y;
-            }
+            //// First, draw the background starfield.
+            _commandList.SetPipeline(_starFieldPipeline);
+            _commandList.SetGraphicsResourceSet(0, _viewInfoSet);
+            _commandList.Draw(4);
         }
 
         public void SetCommandList(CommandList commandList)
         {
-            _cl = commandList;
+            _commandList = commandList;
+        }
+
+        public void SetCamera(Camera camera)
+        {
+            _camera = camera;
+        }
+
+
+        // private readonly Dictionary<Type, BinaryAssetSerializer> _serializers = DefaultSerializers.Get();
+        // public T LoadEmbeddedAsset<T>(string name)
+        // {
+        //     if (!_serializers.TryGetValue(typeof(T), out BinaryAssetSerializer serializer))
+        //     {
+        //         throw new InvalidOperationException("No serializer registered for type " + typeof(T).Name);
+        //     }
+        //
+        //     using (Stream stream = GetType().Assembly.GetManifestResourceStream(name))
+        //     {
+        //         if (stream == null)
+        //         {
+        //             throw new InvalidOperationException("No embedded asset with the name " + name);
+        //         }
+        //
+        //         BinaryReader reader = new BinaryReader(stream);
+        //         return (T)serializer.Read(reader);
+        //     }
+        // }
+
+        private Shader[] LoadShaders(string setName)
+        {
+            return _app.GraphicsDevice.ResourceFactory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex,
+                    ReadEmbeddedAssetBytes("Dck.Engine.src.TEST." + setName + "-vertex.glsl"), "main"),
+                new ShaderDescription(ShaderStages.Fragment,
+                    ReadEmbeddedAssetBytes("Dck.Engine.src.TEST." + setName + "-fragment.glsl"), "main"));
+        }
+
+        public byte[] ReadEmbeddedAssetBytes(string name)
+        {
+            using Stream stream = OpenEmbeddedAssetStream(name);
+            byte[] bytes = new byte[stream.Length];
+            using (MemoryStream ms = new MemoryStream(bytes))
+            {
+                stream.CopyTo(ms);
+                return bytes;
+            }
+        }
+
+        public Stream OpenEmbeddedAssetStream(string name) => GetType().Assembly.GetManifestResourceStream(name);
+        public struct MatrixPair
+        {
+            public Matrix4x4 First;
+            public Matrix4x4 Second;
+
+            public MatrixPair(Matrix4x4 first, Matrix4x4 second)
+            {
+                First = first;
+                Second = second;
+            }
         }
     }
 }

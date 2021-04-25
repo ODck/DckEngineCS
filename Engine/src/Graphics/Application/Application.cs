@@ -28,7 +28,7 @@ namespace Dck.Engine.Graphics.Application
             Window.KeyPressed.Connect(OnKeyDown).AddTo(_disposable);
 
             _camera = cameraFactory(Window.Width, Window.Height);
-            _renderer = new Renderer3D(this);
+            _renderer = new Renderer3D(this);// new GraphicRenderer(_camera);
         }
 
         public IApplicationWindow Window { get; }
@@ -64,13 +64,13 @@ namespace Dck.Engine.Graphics.Application
             CommandList.Begin();
             ResetFramebuffer();
 
-            _renderer.Draw(deltaTime);
+            _renderer.RenderFrame(deltaTime);
             Window.Draw(deltaTime);
 
             CommandList.End();
             GraphicsDevice.SubmitCommands(CommandList);
-            GraphicsDevice.SwapBuffers();
             GraphicsDevice.WaitForIdle();
+            GraphicsDevice.SwapBuffers();
         }
 
         private void OnDeviceDestroyed()
@@ -96,7 +96,8 @@ namespace Dck.Engine.Graphics.Application
             MainSwapchain = swapchain;
             CommandList = factory.CreateCommandList();
             _renderer.SetCommandList(CommandList);
-            _renderer.CreateResources(ResourceFactory);
+            _renderer.SetCamera(_camera);
+            _renderer.CreateResources(graphicsDevice);
         }
 
         private void ResetFramebuffer()

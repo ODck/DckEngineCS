@@ -1,33 +1,64 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <OutputType>Exe</OutputType>
         <TargetFramework>net5.0</TargetFramework>
         <RootNamespace>Dck.Engine</RootNamespace>
         <Company>ODck</Company>
         <Product>Dck Engine</Product>
         <Nullable>disable</Nullable>
+        <ShaderOutputPath>$(BaseIntermediateOutputPath)</ShaderOutputPath>
+        <ShaderContentIncludePath>Dck.Engine.TEST.Shader</ShaderContentIncludePath>
+        <ForceCopyNativeAssimp>true</ForceCopyNativeAssimp>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
+    <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+        <PlatformTarget>AnyCPU</PlatformTarget>
+    </PropertyGroup>
+
     <ItemGroup>
-      <PackageReference Include="Autofac" Version="6.1.0" />
-      <PackageReference Include="DckSubject" Version="1.0.4" />
-      <PackageReference Include="ImGui.NET" Version="1.78.0" />
-      <PackageReference Include="JetBrains.Annotations" Version="2021.1.0-eap01" />
-      <PackageReference Include="Serilog" Version="2.10.1-dev-01285" />
-      <PackageReference Include="Serilog.Exceptions" Version="6.1.0" />
-      <PackageReference Include="Serilog.Sinks.Console" Version="4.0.0-dev-00839" />
-      <PackageReference Include="System.Reactive" Version="5.0.0" />
-      <PackageReference Include="Veldrid" Version="4.8.0" />
-      <PackageReference Include="Veldrid.ImGui" Version="5.72.0" />
-      <PackageReference Include="Veldrid.SPIRV" Version="1.0.14" />
-      <PackageReference Include="Veldrid.StartupUtilities" Version="4.8.0" />
-      <PackageReference Include="Veldrid.Utilities" Version="4.8.0" />
+        <PackageReference Include="AssimpNet" Version="5.0.0-beta1" />
+        <PackageReference Include="Autofac" Version="6.1.0" />
+        <PackageReference Include="DckSubject" Version="1.0.4" />
+        <PackageReference Include="ImGui.NET" Version="1.78.0" />
+        <PackageReference Include="JetBrains.Annotations" Version="2021.1.0-eap01" />
+        <PackageReference Include="Serilog" Version="2.10.1-dev-01285" />
+        <PackageReference Include="Serilog.Exceptions" Version="6.1.0" />
+        <PackageReference Include="Serilog.Sinks.Console" Version="4.0.0-dev-00839" />
+        <PackageReference Include="SixLabors.ImageSharp" Version="1.0.3" />
+        <PackageReference Include="System.Reactive" Version="5.0.0" />
+        <PackageReference Include="TeximpNet" Version="1.4.3" />
+        <PackageReference Include="Veldrid" Version="4.8.0" />
+        <PackageReference Include="Veldrid.ImGui" Version="5.72.0" />
+        <PackageReference Include="Veldrid.SPIRV" Version="1.0.14" />
+        <PackageReference Include="Veldrid.StartupUtilities" Version="4.8.0" />
+        <PackageReference Include="Veldrid.Utilities" Version="4.8.0" />
     </ItemGroup>
 
     <ItemGroup>
-      <Folder Include="src\Assets" />
+      <None Remove="src\TEST\Instance-fragment.glsl" />
     </ItemGroup>
 
+    <ItemGroup>
+      <Folder Include="src\TEST\Assets" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Remove="src\TEST\Starfield-fragment.glsl" />
+      <EmbeddedResource Include="src\TEST\Starfield-fragment.glsl">
+        <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      </EmbeddedResource>
+      <None Remove="src\TEST\Starfield-vertex.glsl" />
+      <EmbeddedResource Include="src\TEST\Starfield-vertex.glsl">
+        <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      </EmbeddedResource>
+    </ItemGroup>
+
+    <Target Name="IncludeGeneratedShaderEmbeddedResource" AfterTargets="AssignTargetPaths" Condition="'$(ShaderContentIncludePath)' != ''">
+        <ItemGroup>
+            <EmbeddedResource Include="@(GeneratedShader)">
+                <LogicalName>%(FileName)%(Extension)</LogicalName>
+            </EmbeddedResource>
+        </ItemGroup>
+    </Target>
 </Project>

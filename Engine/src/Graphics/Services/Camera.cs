@@ -2,6 +2,8 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Dck.Engine.Graphics.Application;
+using Dck.Engine.Logging;
+using Newtonsoft.Json;
 using Veldrid;
 
 namespace Dck.Engine.Graphics.Services
@@ -37,7 +39,7 @@ namespace Dck.Engine.Graphics.Services
 
         public Matrix4x4 ViewMatrix { get; private set; }
 
-        public Matrix4x4 ProjectionMatrix { get; private set; }
+        public Matrix4x4 ProjectionMatrix { get; set; }
 
         public Vector3 Position
         {
@@ -113,7 +115,7 @@ namespace Dck.Engine.Graphics.Services
             if (_input.GetKey(Key.S)) motionDir += Vector3.UnitZ;
             if (_input.GetKey(Key.Q)) motionDir += -Vector3.UnitY;
             if (_input.GetKey(Key.E)) motionDir += Vector3.UnitY;
-
+            
             if (motionDir != Vector3.Zero)
             {
                 var lookRotation = Quaternion.CreateFromYawPitchRoll(Yaw, Pitch, 0f);

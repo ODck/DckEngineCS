@@ -1,5 +1,6 @@
 ﻿using System;
 using Dck.Engine.Settings;
+using JetBrains.Annotations;
 using Serilog;
 using Serilog.Exceptions;
 using Serilog.Sinks.SystemConsole.Themes;
@@ -90,6 +91,8 @@ namespace Dck.Engine.Logging
         /// </summary>
         /// <param name="assertion"></param>
         /// <param name="failedAssertionMessage"></param>
+        [AssertionMethod]
+        [ContractAnnotation("assertion:false=>halt")]
         public static void Assert(bool assertion, string failedAssertionMessage)
         {
             if (!assertion) Error(failedAssertionMessage);
